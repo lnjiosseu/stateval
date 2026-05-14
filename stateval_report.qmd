@@ -1,0 +1,244 @@
+---
+title: "StatEval: A Rigorous Framework for LLM Evaluation in Clinical Health Q&A"
+subtitle: "Combining Statistical Evaluation Design with Causal Inference"
+author: "Ludovic"
+date: today
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    toc-title: "Contents"
+    code-fold: true
+    code-tools: true
+    fig-width: 8
+    fig-height: 5
+    embed-resources: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+```{r setup}
+rm(list = ls())
+library(tidyverse)
+
+eval_data  <- read_csv("data/eval_data.csv")
+user_data  <- read_csv("data/user_data.csv")
+irr        <- read_csv("outputs/irr_summary.csv")
+calib      <- read_csv("outputs/ai_human_calibration.csv")
+power_crv  <- read_csv("outputs/power_curve.csv")
+mde_tab    <- read_csv("outputs/mde_sensitivity.csv")
+neyman     <- read_csv("outputs/neyman_allocation.csv")
+causal     <- read_csv("outputs/causal_results.csv")
+hte        <- read_csv("outputs/hte_by_expertise.csv")
+rubric_def <- read_csv("outputs/rubric_definitions.csv")
+```
+
+## Executive Summary
+
+This project builds a statistically rigorous evaluation framework for LLM outputs in clinical health Q&A contexts — the domain with the highest stakes for response quality and safety. The framework addresses two core questions:
+
+1. **How do we know if evaluation is reliable?** — through rubric design, inter-rater reliability analysis, and AI-human calibration
+2. **What causally drives output quality?** — through propensity-score-weighted causal analysis of user behavior
+
+The methodology draws on principles from clinical trial design (stratified sampling, power analysis, E-values for sensitivity) applied to the evaluation of large language models.
+
+---
+
+## 1. Evaluation Design
+
+### 1.1 Rubric Framework
+
+Six rubrics capture orthogonal dimensions of clinical LLM response quality:
+
+```{r rubric-table}
+rubric_def |>
+  select(rubric, definition, scale) |>
+  knitr::kable(
+    col.names = c("Rubric", "Definition", "Scale"),
+    caption   = "Rubric Framework"
+  )
+```
+
+### 1.2 Sampling Strategy
+
+A stratified design across **complexity × domain** strata improves estimation precision over simple random sampling.
+
+```{r power-curve}
+n_required <- power_crv$n[which.min(abs(power_crv$power - 0.80))]
+
+power_crv |>
+  ggplot(aes(x = n, y = power)) +
+  geom_line(color = "#1a6b9a", linewidth = 1.2) +
+  geom_hline(yintercept = 0.80, linetype = "dashed", color = "gray50") +
+  geom_vline(xintercept = n_required, linetype = "dotted", color = "#c0392b") +
+  annotate("text", x = n_required + 20, y = 0.55,
+           label = paste0("n=", n_required, "\n(80% power)"),
+           size = 3.5, color = "#c0392b", hjust = 0) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  labs(
+    title    = "Power Curve: Detecting a 0.05-Point Rubric Score Difference",
+    subtitle = "Two-sample t-test, alpha = 0.05, MDE = 0.05 score points",
+    x        = "Sample size per group",
+    y        = "Statistical power"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+```{r mde-table}
+mde_tab |>
+  knitr::kable(
+    col.names = c("Delta (score pts)", "Cohen's d", "n per group"),
+    digits    = 3,
+    caption   = "Required Sample Size by Minimum Detectable Effect"
+  )
+```
+
+### 1.3 Neyman Optimal Allocation
+
+Given a fixed human calibration budget of n=100, Neyman allocation assigns graders proportional to stratum variance — ensuring highest-variance strata (complex x medication) receive more coverage.
+
+```{r neyman-plot}
+neyman |>
+  mutate(stratum = fct_reorder(stratum, n_alloc)) |>
+  ggplot(aes(x = n_alloc, y = stratum, fill = sd_ai)) +
+  geom_col() +
+  scale_fill_gradient(low = "#c8e6f5", high = "#1a6b9a", name = "Stratum SD") +
+  labs(
+    title = "Neyman Optimal Allocation Across Strata",
+    x     = "Allocated calibration samples",
+    y     = NULL
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+---
+
+## 2. Inter-Rater Reliability
+
+ICC and Krippendorff's alpha are computed across three human graders on the 10% calibration sample.
+
+```{r irr-table}
+irr |>
+  select(rubric, icc_estimate, icc_lower, icc_upper, kripp_alpha, icc_interpretation) |>
+  knitr::kable(
+    col.names = c("Rubric", "ICC", "95% CI Low", "95% CI High",
+                  "Krippendorff's alpha", "Interpretation"),
+    digits  = 3,
+    caption = "Inter-Rater Reliability by Rubric"
+  )
+```
+
+```{r irr-plot}
+irr |>
+  mutate(rubric = fct_reorder(rubric, icc_estimate)) |>
+  ggplot(aes(x = icc_estimate, xmin = icc_lower, xmax = icc_upper, y = rubric,
+             color = icc_interpretation)) +
+  geom_pointrange(size = 0.8) +
+  geom_vline(xintercept = c(0.75, 0.90), linetype = "dashed", color = "gray70") +
+  annotate("text", x = 0.75, y = 0.6, label = "Good", size = 3, color = "gray50", hjust = 1.1) +
+  annotate("text", x = 0.90, y = 0.6, label = "Excellent", size = 3, color = "gray50", hjust = 1.1) +
+  scale_color_manual(values = c("Excellent" = "#1a6b9a", "Good" = "#2ecc71",
+                                "Moderate" = "#f39c12", "Poor - recalibrate" = "#c0392b")) +
+  scale_x_continuous(limits = c(0.7, 1.0)) +
+  labs(title = "ICC Estimates with 95% CI by Rubric", x = "ICC (two-way mixed, absolute agreement)",
+       y = NULL, color = NULL) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "bottom")
+```
+
+---
+
+## 3. AI-Human Calibration
+
+```{r calibration-plot}
+calib |>
+  pivot_longer(c(mean_bias, mae, corr), names_to = "metric", values_to = "value") |>
+  mutate(metric = recode(metric,
+    mean_bias = "Mean Bias (AI - Human)",
+    mae       = "Mean Absolute Error",
+    corr      = "Pearson Correlation"
+  )) |>
+  ggplot(aes(x = rubric, y = value, fill = rubric)) +
+  geom_col(show.legend = FALSE) +
+  geom_hline(yintercept = 0, color = "gray40") +
+  facet_wrap(~ metric, scales = "free_y", nrow = 1) +
+  labs(title = "AI Grader vs Human Calibration by Rubric", x = NULL, y = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 35, hjust = 1))
+```
+
+```{r calibration-table}
+calib |>
+  knitr::kable(
+    col.names = c("Rubric", "N", "Mean Bias", "MAE", "RMSE", "Correlation"),
+    digits    = 4,
+    caption   = "AI vs Human Calibration Metrics"
+  )
+```
+
+---
+
+## 4. Causal Analysis: Does Prompt Context Improve Satisfaction?
+
+### 4.1 Causal Model
+
+The DAG encodes our assumptions: **user expertise** confounds both context usage and satisfaction, requiring adjustment via propensity score weighting.
+
+> **Treatment**: `uses_context` (whether the user includes clinical context in their prompt)  
+> **Outcome**: `satisfaction` (1-5 scale)  
+> **Key confounder**: `user_expertise`
+
+### 4.2 Results
+
+```{r causal-results}
+causal |>
+  knitr::kable(
+    col.names = c("Estimand", "Estimate", "SE", "Method"),
+    digits    = 4,
+    caption   = "Causal Effect Estimates"
+  )
+```
+
+### 4.3 Heterogeneous Treatment Effects
+
+```{r hte-plot}
+hte |>
+  mutate(user_expertise = factor(user_expertise,
+                                  levels = c("novice", "intermediate", "expert"))) |>
+  ggplot(aes(x = user_expertise, y = cate, ymin = ci_lower, ymax = ci_upper)) +
+  geom_pointrange(color = "#1a6b9a", size = 0.8) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray60") +
+  labs(
+    title    = "Conditional ATE by User Expertise",
+    subtitle = "Effect of including clinical context on satisfaction score (1-5 scale)",
+    x        = "User expertise",
+    y        = "Estimated causal effect"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+---
+
+## 5. Key Takeaways
+
+- **Rubric reliability is strong**: ICC > 0.88 across all six rubrics; safety is the weakest and warrants ongoing grader calibration
+- **AI grader bias is rubric-specific**: safety is under-rated; completeness has the highest MAE — requiring targeted recalibration rather than a global correction
+- **Stratified sampling is more efficient**: Neyman allocation ensures adequate coverage of rare, high-variance strata (complex x medication)
+- **Including clinical context causally increases satisfaction** (ATE ~+0.38 points on a 1-5 scale), with the effect consistent across all expertise levels
+- **E-value > 3**: an unmeasured confounder would need a risk ratio above 3 with both treatment and outcome to fully explain away the effect — indicating robust findings
+
+---
+
+## Appendix: Methodological Notes
+
+### On Rubric Score Distributions
+All rubric scores are bounded [0,1]. We use interval-scale Krippendorff's alpha rather than ordinal, given the continuous nature of the AI grader output.
+
+### On IPW Estimator Choice
+We report both standard IPW and doubly-robust (AIPW) estimates. Agreement between the two increases confidence in the causal estimate. AIPW is consistent if either the propensity score model or the outcome model is correctly specified.
+
+### On E-Values
+Following VanderWeele & Ding (2017), E-values quantify the minimum strength of unmeasured confounding required to explain away the observed effect. Values substantially above 1.0 indicate robustness.
