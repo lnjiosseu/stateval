@@ -1,0 +1,10 @@
+name: stateval-dashboard
+title:
+username: lnjiosseu
+account: lnjiosseu
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 17383616
+bundleId: 12011133
+url: https://lnjiosseu.shinyapps.io/stateval-dashboard/
+version: 1

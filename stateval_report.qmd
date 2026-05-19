@@ -1,5 +1,5 @@
 ---
-title: "StatEval: A Rigorous Framework for LLM Evaluation in Clinical Health Q&A"
+title: "StatEval: A Rigorous Framework for LLM Evaluation with Causal Inference"
 subtitle: "Combining Statistical Evaluation Design with Causal Inference"
 author: "Ludovic"
 date: today
